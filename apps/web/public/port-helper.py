@@ -7,15 +7,19 @@ web page.
 
     python3 port-helper.py --origin https://your-site.vercel.app
 
-Safety: binds to 127.0.0.1 only, read-only (GET), and answers only the
-origins you pass with --origin.
+Safety: binds to 127.0.0.1 only and answers only the origins you pass with
+--origin. Stopping a process is limited to a PID that is listening on the
+given port right now, owned by you and not a system app. Start with
+--read-only to turn stopping off.
 """
 import argparse
 import json
 import os
+import signal
 import socket
 import ssl
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -25,7 +29,9 @@ HOME = os.path.expanduser("~")
 NO_PROBE_APPS = ("mysqld", "mongod", "postgres", "redis-server", "rapportd")
 PROBE_TIMEOUT = 0.5
 
-VERSION = "1.1"
+VERSION = "1.2"
+STOP_WAIT_SECONDS = 3
+MAX_BODY_BYTES = 1024
 # (text to find in the app name, label, group)
 APP_RULES = (
     ("rapportd", "macOS sharing", "system"),
@@ -56,6 +62,7 @@ RUNTIME_RULES = (("node", "Node.js"), ("python", "Python"), ("java", "Java"), ("
 
 allowed_origins = set()
 probe_cache = {}
+settings = {"read_only": False}
 
 
 def run(cmd):
@@ -252,6 +259,61 @@ def web_url(kind, hosts, port):
     return f"{kind}://{'[::1]' if only_v6 else 'localhost'}:{port}"
 
 
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def stop_process(pid, port, force):
+    """Stop one process that listens on `port`. Returns (status, body)."""
+    sockets = listening_sockets()
+    if (pid, port) not in sockets:
+        return 409, {"error": f"PID {pid} is not listening on port {port} any more"}
+    if pid == os.getpid():
+        return 403, {"error": "the helper cannot stop itself"}
+    command = processes([pid]).get(pid, (0, ""))[1]
+    app = app_name(sockets[(pid, port)]["app"], command)
+    folder = pretty_folder(working_dirs([pid]).get(pid, ""))
+    _, group = describe(app, command, folder)
+    if group == "system":
+        return 403, {"error": f"{app} is a system app, stop it from macOS instead"}
+
+    try:
+        os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
+    except ProcessLookupError:
+        return 200, {"stopped": True, "pid": pid, "port": port}
+    except PermissionError:
+        return 403, {"error": f"no permission to stop PID {pid} (owned by another user)"}
+
+    deadline = time.monotonic() + STOP_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if not alive(pid):
+            probe_cache.pop((pid, port), None)
+            return 200, {"stopped": True, "pid": pid, "port": port}
+        time.sleep(0.1)
+    return 202, {"stopped": False, "pid": pid, "port": port,
+                 "error": "still running after 3 s, try Force stop"}
+
+
+def parse_stop_request(raw):
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    pid, port, force = body.get("pid"), body.get("port"), body.get("force", False)
+    valid = all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in (pid, port))
+    if not valid or not isinstance(force, bool):
+        return None
+    return pid, port, force
+
+
 class Handler(BaseHTTPRequestHandler):
     def host_ok(self):
         host = self.headers.get("Host", "")
@@ -263,7 +325,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Private-Network", "true")
-            self.send_header("Access-Control-Allow-Methods", "GET")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
     def reply(self, status, body):
         data = json.dumps(body).encode()
@@ -295,13 +358,44 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.split("?")[0] != "/ports":
             self.reply(404, {"error": "use /ports"})
             return
-        self.reply(200, {"version": VERSION, "ports": scan()})
+        can_kill = not settings["read_only"]
+        self.reply(200, {"version": VERSION, "canKill": can_kill, "ports": scan()})
+
+    def do_POST(self):
+        if not self.host_ok():
+            self.reply(403, {"error": "bad host"})
+            return
+        # Stopping needs an allowed page: a missing Origin is refused too.
+        origin = self.headers.get("Origin")
+        if origin not in allowed_origins:
+            self.reply(403, {"error": f"origin not allowed: {origin}"})
+            return
+        if self.path.split("?")[0] != "/kill":
+            self.reply(404, {"error": "use /kill"})
+            return
+        if settings["read_only"]:
+            self.reply(403, {"error": "helper started with --read-only"})
+            return
+        if not self.headers.get("Content-Type", "").startswith("application/json"):
+            self.reply(415, {"error": "send JSON"})
+            return
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self.reply(400, {"error": "bad body size"})
+            return
+        request = parse_stop_request(self.rfile.read(length))
+        if request is None:
+            self.reply(400, {"error": "send {pid, port, force}"})
+            return
+        status, body = stop_process(*request)
+        self.reply(status, body)
 
     def log_message(self, fmt, *args):
         pass
 
 
 def main():
+    global HELPER_PORT
     parser = argparse.ArgumentParser(description="Port Finder helper")
     parser.add_argument(
         "--origin",
@@ -309,7 +403,15 @@ def main():
         default=[],
         help="web page address allowed to read the list (repeatable)",
     )
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="list ports only, never stop a process",
+    )
+    parser.add_argument("--port", type=int, default=HELPER_PORT, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    settings["read_only"] = args.read_only
+    HELPER_PORT = args.port
     env_origins = os.environ.get("PORT_FINDER_ORIGINS", "").split(",")
     for origin in args.origin + env_origins:
         origin = origin.strip().rstrip("/")

@@ -1,39 +1,57 @@
 # Port Finder
 
-See every port running on your laptop, the app behind it, and its project folder.
+See every port running on your laptop, the app behind it, and the project it belongs to — and stop the ones you no longer need.
 
-- `index.html` — the web page (deploy to Vercel, no build step).
-- `port-helper.py` — small helper that runs on your laptop (Python 3, no installs).
+## How it works
 
-## Use
+| Mode | Install | What you see |
+|---|---|---|
+| **Quick scan** | none | Web servers on ~60 common dev ports (3000, 5173, 8000…). Browser only. |
+| **Full details** | one command | Every listening port, app name, project folder, PID, uptime, **Stop** button. |
+| **Demo** | none | Sample data, to try the UI. |
 
-1. Open the page. If the helper is not running, the page shows one command to copy.
-2. Run that command in Terminal. It downloads `port-helper.py` and starts it:
+Full details need a small helper on your laptop (macOS, Python 3, no installs):
 
-   ```
-   python3 port-helper.py --origin https://YOUR-SITE.vercel.app
-   ```
+```
+curl -fsSO https://YOUR-SITE/port-helper.py && python3 port-helper.py --origin https://YOUR-SITE
+```
 
-3. The page connects by itself within 3 seconds.
-
-## What you see
-
-- Ports grouped by project folder, with a name for each app (Next.js, Vite, Uvicorn, MongoDB…).
-- Uptime and process ID for each port.
-- **Open** and **Copy** for ports that serve a web page.
-- Search, a sortable table of all ports, auto-refresh every 5 s, light and dark theme.
+The page connects by itself within 3 seconds.
 
 ## Safety
 
 - The helper listens on `127.0.0.1:4999` only, so other machines cannot reach it.
-- It is read-only: it lists ports and cannot stop anything.
-- It answers only the page address given with `--origin`.
+- It answers only the page addresses given with `--origin`.
+- **Stop** asks first, sends SIGTERM, and offers Force stop (SIGKILL) only if the process is still running after 3 s.
+- It only stops a PID that is listening on that port right now, owned by you, and not a system app.
+- Start with `--read-only` to turn stopping off.
 
-## Local test
+## Repo layout
 
 ```
-python3 -m http.server 4998 --bind 127.0.0.1
-python3 port-helper.py --origin http://localhost:4998
+apps/web/                 Next.js 16 app (deploy this folder)
+apps/web/public/port-helper.py   the helper, served for the one-line install
 ```
 
-Then open http://localhost:4998.
+## Develop
+
+```
+npm install
+npm run dev          # http://localhost:3000
+npm test             # unit tests
+npm run lint && npm run typecheck
+```
+
+Local helper for development:
+
+```
+python3 apps/web/public/port-helper.py --origin http://localhost:3000
+```
+
+## Deploy (Vercel)
+
+Project settings → **Root Directory** = `apps/web`. Framework is detected as Next.js.
+
+## License
+
+MIT
