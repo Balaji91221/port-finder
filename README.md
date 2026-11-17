@@ -7,15 +7,21 @@ See every port running on your laptop, the app behind it, and its project folder
 
 ## Use
 
-1. Start the helper, passing the address of the page:
+1. Open the page. If the helper is not running, the page shows one command to copy.
+2. Run that command in Terminal. It downloads `port-helper.py` and starts it:
 
    ```
    python3 port-helper.py --origin https://YOUR-SITE.vercel.app
    ```
 
-2. Open the page and click **Check**.
+3. The page connects by itself within 3 seconds.
 
-The page shows the exact command if the helper is not running.
+## What you see
+
+- Ports grouped by project folder, with a name for each app (Next.js, Vite, Uvicorn, MongoDB…).
+- Uptime and process ID for each port.
+- **Open** and **Copy** for ports that serve a web page.
+- Search, a sortable table of all ports, auto-refresh every 5 s, light and dark theme.
 
 ## Safety
 

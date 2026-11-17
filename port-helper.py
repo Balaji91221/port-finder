@@ -25,6 +25,35 @@ HOME = os.path.expanduser("~")
 NO_PROBE_APPS = ("mysqld", "mongod", "postgres", "redis-server", "rapportd")
 PROBE_TIMEOUT = 0.5
 
+VERSION = "1.1"
+# (text to find in the app name, label, group)
+APP_RULES = (
+    ("rapportd", "macOS sharing", "system"),
+    ("controlcenter", "AirPlay Receiver", "system"),
+    ("code helper", "VS Code", "system"),
+    ("claude", "Claude Code", "system"),
+    ("mongod", "MongoDB", "service"),
+    ("mysqld", "MySQL", "service"),
+    ("postgres", "PostgreSQL", "service"),
+    ("redis-server", "Redis", "service"),
+    ("minio", "MinIO", "service"),
+    ("com.docker", "Docker", "service"),
+    ("ollama", "Ollama", "service"),
+)
+# (text to find in the command line, label)
+COMMAND_RULES = (
+    ("next-server", "Next.js"),
+    ("next dev", "Next.js"),
+    ("vite", "Vite"),
+    ("uvicorn", "Uvicorn"),
+    ("gunicorn", "Gunicorn"),
+    ("streamlit", "Streamlit"),
+    ("flask", "Flask"),
+    ("http.server", "Python http.server"),
+    ("webpack", "Webpack"),
+)
+RUNTIME_RULES = (("node", "Node.js"), ("python", "Python"), ("java", "Java"), ("ruby", "Ruby"))
+
 allowed_origins = set()
 probe_cache = {}
 
@@ -75,18 +104,49 @@ def working_dirs(pids):
     return dirs
 
 
-def commands(pids):
-    """Return {pid: full command line}."""
+def etime_seconds(text):
+    """Turn ps elapsed time ([[dd-]hh:]mm:ss) into seconds."""
+    days, _, clock = text.rpartition("-")
+    parts = [int(p) for p in clock.split(":") if p.isdigit()]
+    seconds = 0
+    for part in parts:
+        seconds = seconds * 60 + part
+    return seconds + (int(days) * 86400 if days.isdigit() else 0)
+
+
+def processes(pids):
+    """Return {pid: (uptime seconds, full command line)}."""
     if not pids:
         return {}
     pid_list = ",".join(str(p) for p in pids)
-    out = run(["ps", "-o", "pid=,command=", "-p", pid_list])
-    cmds = {}
+    out = run(["ps", "-o", "pid=,etime=,command=", "-p", pid_list])
+    procs = {}
     for line in out.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) == 2 and parts[0].isdigit():
-            cmds[int(parts[0])] = parts[1]
-    return cmds
+        parts = line.strip().split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit():
+            procs[int(parts[0])] = (etime_seconds(parts[1]), parts[2])
+    return procs
+
+
+def describe(app, command, folder):
+    """Return (label, group). Group is "project", "service" or "system"."""
+    app_low = app.lower()
+    for needle, label, group in APP_RULES:
+        if needle in app_low:
+            return label, group
+    if not folder:
+        return app, "system"
+    group = "project"
+    if not folder.startswith("~") or folder.startswith("~/Library"):
+        group = "service"
+    cmd_low = command.lower()
+    for needle, label in COMMAND_RULES:
+        if needle in cmd_low:
+            return label, group
+    for needle, label in RUNTIME_RULES:
+        if app_low.startswith(needle):
+            return label, group
+    return app, group
 
 
 def app_name(app, command):
@@ -145,34 +205,51 @@ def scan():
     sockets = listening_sockets()
     pids = sorted({pid for pid, _ in sockets})
     dirs = working_dirs(pids)
-    cmds = commands(pids)
+    procs = processes(pids)
 
     for key in list(probe_cache):
         if key not in sockets:
             del probe_cache[key]
 
     with ThreadPoolExecutor(max_workers=32) as pool:
-        kinds = pool.map(
+        kinds = list(pool.map(
             lambda item: web_kind(item[0][0], item[0][1], item[1]["app"], item[1]["hosts"]),
             sockets.items(),
-        )
-        rows = []
-        for ((pid, port), info), kind in zip(sockets.items(), kinds):
-            if port == HELPER_PORT and pid == os.getpid():
-                continue
-            only_v6 = all(h.startswith("[") for h in info["hosts"])
-            url_host = "[::1]" if only_v6 else "localhost"
-            rows.append({
-                "port": port,
-                "pid": pid,
-                "app": app_name(info["app"], cmds.get(pid, "")),
-                "folder": pretty_folder(dirs.get(pid, "")),
-                "command": cmds.get(pid, ""),
-                "hosts": sorted(info["hosts"]),
-                "url": f"{kind}://{url_host}:{port}" if kind else "",
-            })
-    rows.sort(key=lambda r: (r["port"], r["pid"]))
-    return rows
+        ))
+
+    merged = {}
+    for ((pid, port), info), kind in zip(sockets.items(), kinds):
+        if port == HELPER_PORT and pid == os.getpid():
+            continue
+        uptime, command = procs.get(pid, (0, ""))
+        app = app_name(info["app"], command)
+        folder = pretty_folder(dirs.get(pid, ""))
+        row = merged.get((port, app, folder))
+        if row:
+            row["pids"].append(pid)
+            row["uptime"] = max(row["uptime"], uptime)
+            row["url"] = row["url"] or web_url(kind, info["hosts"], port)
+            continue
+        label, group = describe(app, command, folder)
+        merged[(port, app, folder)] = {
+            "port": port,
+            "pids": [pid],
+            "app": app,
+            "label": label,
+            "group": group,
+            "folder": folder,
+            "command": command,
+            "uptime": uptime,
+            "url": web_url(kind, info["hosts"], port),
+        }
+    return sorted(merged.values(), key=lambda r: (r["port"], r["pids"][0]))
+
+
+def web_url(kind, hosts, port):
+    if not kind:
+        return ""
+    only_v6 = all(h.startswith("[") for h in hosts)
+    return f"{kind}://{'[::1]' if only_v6 else 'localhost'}:{port}"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -218,7 +295,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.split("?")[0] != "/ports":
             self.reply(404, {"error": "use /ports"})
             return
-        self.reply(200, {"ports": scan()})
+        self.reply(200, {"version": VERSION, "ports": scan()})
 
     def log_message(self, fmt, *args):
         pass
