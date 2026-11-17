@@ -1,0 +1,58 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report! Security problems go to SECURITY.md, not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the helper with ...
+        2. Click ...
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Full details (helper)
+        - Quick scan
+        - Demo
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Chrome 142
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: macOS 15.2
+    validations:
+      required: true
+  - type: input
+    id: helper
+    attributes:
+      label: Helper version
+      description: The "version" field at http://127.0.0.1:4999/ports, if you use the helper.
+      placeholder: "1.2"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console errors or screenshots
+      description: Browser DevTools console output. Remove folder names you do not want to share.

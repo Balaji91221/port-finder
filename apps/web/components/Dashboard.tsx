@@ -109,7 +109,8 @@ function Body({ source, prefs, port, onPrefs, copy, toast }: BodyProps) {
         />
       );
     case "helper":
-    case "demo":
+    case "demo": {
+      const canStop = source.kind === "demo" || source.canKill;
       return (
         <FullView
           ports={source.ports}
@@ -121,9 +122,11 @@ function Body({ source, prefs, port, onPrefs, copy, toast }: BodyProps) {
           onLeaveDemo={port.leaveDemo}
           onCopy={copy}
           onToast={toast}
-          onStop={source.kind === "demo" || source.canKill ? port.stopRow : undefined}
+          onStop={canStop ? port.stopRow : undefined}
+          onStopAll={canStop ? port.stopRows : undefined}
         />
       );
+    }
     default: {
       const _exhaustive: never = source;
       throw new Error(`unhandled source: ${JSON.stringify(_exhaustive)}`);

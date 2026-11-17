@@ -38,6 +38,8 @@ export type StopResult =
   | { ok: true }
   | { ok: false; canForce: boolean; message: string };
 
+export type StopAllResult = { stopped: number; failed: number; firstError: string };
+
 export type View = "projects" | "table";
 export type Theme = "" | "light" | "dark";
 

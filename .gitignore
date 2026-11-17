@@ -6,3 +6,5 @@ out/
 .vercel
 .DS_Store
 __pycache__/
+# helper downloaded by the one-line install
+/port-helper.py

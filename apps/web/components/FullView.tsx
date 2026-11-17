@@ -5,6 +5,7 @@ import { filterPorts, portStats } from "@/lib/group";
 import type { PortInfo, Prefs } from "@/lib/types";
 import { SearchIcon } from "./icons";
 import { ProjectView, TableView, type RowActions, type Sort, type SortKey } from "./PortList";
+import { StopAllButton, type StopAllFn } from "./StopAllButton";
 import type { StopFn } from "./StopButton";
 
 type FullViewProps = {
@@ -19,6 +20,7 @@ type FullViewProps = {
   onToast: (text: string) => void;
   /** Missing when the helper is read-only or too old to stop processes. */
   onStop?: StopFn;
+  onStopAll?: StopAllFn;
 };
 
 function Stats({ ports }: { ports: PortInfo[] }) {
@@ -50,7 +52,7 @@ function useSlashFocus(): React.RefObject<HTMLInputElement | null> {
 }
 
 export function FullView(props: FullViewProps) {
-  const { ports, prefs, busy, demo, onPrefs, onRefresh, onLeaveDemo, onCopy, onToast, onStop } = props;
+  const { ports, prefs, busy, demo, onPrefs, onRefresh, onLeaveDemo, onCopy, onToast, onStop, onStopAll } = props;
   const actions: RowActions = { onCopy, onToast, onStop };
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>({ key: "port", desc: false });
@@ -117,6 +119,7 @@ export function FullView(props: FullViewProps) {
           </label>
         )}
         <button type="button" className="btn" disabled={!urls.length} onClick={openAll}>Open all</button>
+        {onStopAll ? <StopAllButton rows={rows} onStopAll={onStopAll} onToast={onToast} /> : null}
         {demo ? null : (
           <button type="button" className="btn primary" disabled={busy} onClick={onRefresh}>Refresh</button>
         )}

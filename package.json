@@ -9,9 +9,16 @@
     "build": "npm run build -w @port-finder/web",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:helper": "python3 -c \"import ast; ast.parse(open('apps/web/public/port-helper.py').read()); print('helper syntax OK')\""
   },
   "engines": {
     "node": ">=20"
+  },
+  "description": "See every port running on your laptop, the app behind it, and its project folder.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Balaji91221/port-finder.git"
   }
 }

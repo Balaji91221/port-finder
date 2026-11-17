@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DEMO_PORTS } from "@/lib/demoData";
 import { fetchHelper, stopProcess, type HelperResult } from "@/lib/helper";
 import { COMMON_PORTS, quickScan } from "@/lib/quickScan";
-import type { PortInfo, Source, StopResult } from "@/lib/types";
+import type { PortInfo, Source, StopAllResult, StopResult } from "@/lib/types";
 
 const OFFLINE_RETRY_MS = 3000;
 const AUTO_REFRESH_MS = 5000;
@@ -19,7 +19,19 @@ export type PortSourceApi = {
   showDemo: () => void;
   leaveDemo: () => void;
   stopRow: (row: PortInfo, force: boolean) => Promise<StopResult>;
+  stopRows: (rows: PortInfo[]) => Promise<StopAllResult>;
 };
+
+/** Stop every process on the row, one at a time; the first failure wins. */
+async function stopPids(row: PortInfo, force: boolean): Promise<StopResult> {
+  for (const pid of row.pids) {
+    const result = await stopProcess({ pid, port: row.port, force });
+    if (!result.ok) {
+      return result;
+    }
+  }
+  return { ok: true };
+}
 
 /**
  * Owns where the port list comes from: the local helper, the browser-only
@@ -85,26 +97,51 @@ export function usePortSource(autoRefresh: boolean): PortSourceApi {
     void refresh();
   }, [refresh]);
 
-  /** Stop every process on the row, one at a time; the first failure wins. */
+  const dropDemoRows = useCallback((rows: PortInfo[]): void => {
+    setSource((prev) => (prev.kind === "demo"
+      ? { kind: "demo", ports: prev.ports.filter((r) => !rows.includes(r)) }
+      : prev));
+  }, []);
+
   const stopRow = useCallback(async (row: PortInfo, force: boolean): Promise<StopResult> => {
     if (kind === "demo") {
-      setSource((prev) => (prev.kind === "demo"
-        ? { kind: "demo", ports: prev.ports.filter((r) => r !== row) }
-        : prev));
+      dropDemoRows([row]);
       return { ok: true };
     }
-    for (const pid of row.pids) {
-      const result = await stopProcess({ pid, port: row.port, force });
-      if (!result.ok) {
-        return result;
+    const result = await stopPids(row, force);
+    if (result.ok) {
+      await refresh();
+    }
+    return result;
+  }, [kind, refresh, dropDemoRows]);
+
+  /** Stop each row in turn (SIGTERM only), then refresh once. */
+  const stopRows = useCallback(async (rows: PortInfo[]): Promise<StopAllResult> => {
+    if (kind === "demo") {
+      dropDemoRows(rows);
+      return { stopped: rows.length, failed: 0, firstError: "" };
+    }
+    const outcome: StopAllResult = { stopped: 0, failed: 0, firstError: "" };
+    for (const row of rows) {
+      const result = await stopPids(row, false);
+      if (result.ok) {
+        outcome.stopped += 1;
+      } else {
+        outcome.failed += 1;
+        outcome.firstError ||= `Port ${row.port}: ${result.message}`;
       }
     }
     await refresh();
-    return { ok: true };
-  }, [kind, refresh]);
+    return outcome;
+  }, [kind, refresh, dropDemoRows]);
 
   // First check on load.
   useEffect(() => {
+    // "?demo" opens the demo straight away, for shared links and screenshots.
+    if (new URLSearchParams(location.search).has("demo")) {
+      queueMicrotask(() => setSource({ kind: "demo", ports: DEMO_PORTS }));
+      return;
+    }
     void fetchHelper(AbortSignal.timeout(HELPER_TIMEOUT_MS)).then(apply);
     return () => scanAbort.current?.abort();
   }, [apply]);
@@ -136,5 +173,5 @@ export function usePortSource(autoRefresh: boolean): PortSourceApi {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [kind, refresh]);
 
-  return { source, busy, refresh, startScan, stopScan, showDemo, leaveDemo, stopRow };
+  return { source, busy, refresh, startScan, stopScan, showDemo, leaveDemo, stopRow, stopRows };
 }
