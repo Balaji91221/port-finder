@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Port Finder</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #16181d; --muted: #667085;
+    --line: #e3e6eb; --accent: #2456e6; --accent-text: #ffffff;
+    --chip: #eef1f6; --warn-bg: #fff6e0; --warn-line: #f0d48a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111318; --card: #1a1d24; --text: #e8eaee; --muted: #98a1b0;
+      --line: #2b303a; --accent: #6d93ff; --accent-text: #0d1220;
+      --chip: #252a34; --warn-bg: #2c2610; --warn-line: #6b5a1c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { margin: 0 0 4px; font-size: 26px; }
+  .sub { margin: 0 0 20px; color: var(--muted); }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
+  button, .open {
+    border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600;
+    background: var(--accent); color: var(--accent-text); cursor: pointer; text-decoration: none;
+  }
+  button.ghost { background: var(--chip); color: var(--text); }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=search] {
+    flex: 1; min-width: 160px; padding: 9px 12px; font: inherit; color: var(--text);
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  }
+  label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  .status { color: var(--muted); margin-bottom: 12px; min-height: 1.5em; }
+  .help {
+    background: var(--warn-bg); border: 1px solid var(--warn-line);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+  }
+  .help p { margin: 0 0 8px; }
+  code, pre { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre {
+    margin: 0 0 8px; padding: 10px 12px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 8px; overflow-x: auto;
+  }
+  .table-wrap {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; overflow-x: auto;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  td.port { font-weight: 700; font-variant-numeric: tabular-nums; }
+  td.folder {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+    word-break: break-all;
+  }
+  td.action { white-space: nowrap; }
+  td.cmd {
+    color: var(--muted); font-size: 12px; max-width: 180px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .muted { color: var(--muted); }
+  .open { padding: 5px 12px; font-size: 13px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Port Finder</h1>
+  <p class="sub">See every port running on this laptop, the app behind it, and its project folder.</p>
+
+  <div class="bar">
+    <button id="check">Check</button>
+    <button id="openAll" class="ghost" disabled>Open all web ports</button>
+    <input id="filter" type="search" placeholder="Filter by port, app or folder">
+    <label><input id="showSystem" type="checkbox"> Show system apps</label>
+  </div>
+
+  <div id="help" class="help" hidden>
+    <p><strong>The helper is not running on this laptop.</strong> Start it in Terminal, then click Check again:</p>
+    <pre id="helpCmd"></pre>
+    <p class="muted">The helper is one small Python file (<code>port-helper.py</code>) from this project.
+      It only answers this page, and only on this laptop. If your browser asks to allow
+      "local network" access, click Allow.</p>
+  </div>
+
+  <div id="status" class="status">Click Check to scan this laptop.</div>
+
+  <div id="tableWrap" class="table-wrap" hidden>
+    <table>
+      <thead>
+        <tr><th>Port</th><th>App</th><th>Project folder</th><th>Command</th><th>PID</th><th></th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+const HELPER = "http://127.0.0.1:4999/ports";
+const el = (id) => document.getElementById(id);
+let ports = [];
+
+function isSystem(row) {
+  return !row.folder;
+}
+
+function visibleRows() {
+  const text = el("filter").value.trim().toLowerCase();
+  const showSystem = el("showSystem").checked;
+  return ports.filter((row) => {
+    if (!showSystem && isSystem(row)) return false;
+    if (!text) return true;
+    const hay = [row.port, row.app, row.folder, row.command].join(" ").toLowerCase();
+    return hay.includes(text);
+  });
+}
+
+function cell(text, className) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (className) td.className = className;
+  return td;
+}
+
+function render() {
+  const rows = visibleRows();
+  const body = el("rows");
+  body.replaceChildren();
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    tr.append(
+      cell(row.port, "port"),
+      cell(row.app),
+      cell(row.folder || "(system app)", row.folder ? "folder" : "muted"),
+    );
+    const cmd = cell(row.command, "cmd");
+    cmd.title = row.command;
+    tr.append(cmd, cell(row.pid, "muted"));
+    const action = document.createElement("td");
+    action.className = "action";
+    if (row.url) {
+      const link = document.createElement("a");
+      link.className = "open";
+      link.href = row.url;
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "Open";
+      action.append(link);
+    } else {
+      action.textContent = "not a web page";
+      action.className = "action muted";
+    }
+    tr.append(action);
+    body.append(tr);
+  }
+  const hidden = ports.length - rows.length;
+  const web = rows.filter((row) => row.url).length;
+  el("tableWrap").hidden = ports.length === 0;
+  el("openAll").disabled = web === 0;
+  if (ports.length) {
+    el("status").textContent =
+      `${rows.length} ports shown, ${web} can open in the browser` +
+      (hidden ? `, ${hidden} hidden` : "") + ".";
+  }
+}
+
+async function check() {
+  el("check").disabled = true;
+  el("status").textContent = "Scanning…";
+  try {
+    const res = await fetch(HELPER, { cache: "no-store" });
+    if (!res.ok) throw new Error(`helper answered ${res.status}`);
+    const data = await res.json();
+    ports = Array.isArray(data.ports) ? data.ports : [];
+    el("help").hidden = true;
+    render();
+  } catch (err) {
+    ports = [];
+    render();
+    el("helpCmd").textContent = `python3 port-helper.py --origin ${location.origin}`;
+    el("help").hidden = false;
+    el("status").textContent = "Could not reach the helper.";
+  } finally {
+    el("check").disabled = false;
+  }
+}
+
+function openAll() {
+  const seen = new Set();
+  let blocked = 0;
+  for (const row of visibleRows()) {
+    if (!row.url || seen.has(row.url)) continue;
+    seen.add(row.url);
+    if (!window.open(row.url, "_blank", "noopener")) blocked += 1;
+  }
+  if (blocked) {
+    el("status").textContent =
+      "Your browser blocked some tabs. Allow pop-ups for this site, then click again.";
+  }
+}
+
+el("check").addEventListener("click", check);
+el("openAll").addEventListener("click", openAll);
+el("filter").addEventListener("input", render);
+el("showSystem").addEventListener("change", render);
+</script>
+</body>
+</html>
