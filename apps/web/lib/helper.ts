@@ -1,10 +1,12 @@
-import { errorText, parseHelperReply, type HelperReply } from "./parse";
-import type { StopResult } from "./types";
+import { errorText, parseHelperReply, parseLogReply, type HelperReply } from "./parse";
+import type { LogResult, StopResult } from "./types";
 
 const HELPER_ORIGIN = "http://127.0.0.1:4999";
 export const HELPER_URL = `${HELPER_ORIGIN}/ports`;
 const STOP_URL = `${HELPER_ORIGIN}/kill`;
+const LOGS_URL = `${HELPER_ORIGIN}/logs`;
 const STOP_TIMEOUT_MS = 8000;
+const LOGS_TIMEOUT_MS = 5000;
 
 export type HelperResult =
   | ({ ok: true } & HelperReply)
@@ -53,6 +55,28 @@ export async function stopProcess(request: StopRequest): Promise<StopResult> {
   // 202: the process got SIGTERM but is still running.
   const message = errorText(body) || `Helper answered ${res.status}`;
   return { ok: false, canForce: res.status === 202, message };
+}
+
+type LogRequest = { pid: number; port: number; signal: AbortSignal };
+
+export async function fetchLogs({ pid, port, signal }: LogRequest): Promise<LogResult> {
+  const query = new URLSearchParams({ pid: String(pid), port: String(port) });
+  let res: Response;
+  try {
+    const timeout = AbortSignal.timeout(LOGS_TIMEOUT_MS);
+    res = await fetch(`${LOGS_URL}?${query}`, {
+      cache: "no-store",
+      signal: AbortSignal.any([signal, timeout]),
+    });
+  } catch {
+    return { ok: false, message: "Helper not reachable" };
+  }
+  const body = await readJson(res);
+  if (!res.ok) {
+    return { ok: false, message: errorText(body) || `Helper answered ${res.status}` };
+  }
+  const reply = parseLogReply(body);
+  return reply ? { ok: true, ...reply } : { ok: false, message: "Helper sent logs in an unknown shape" };
 }
 
 export function helperCommand(origin: string): string {

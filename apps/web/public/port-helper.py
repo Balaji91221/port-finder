@@ -10,18 +10,22 @@ web page.
 Safety: binds to 127.0.0.1 only and answers only the origins you pass with
 --origin. Stopping a process is limited to a PID that is listening on the
 given port right now, owned by you and not a system app. Start with
---read-only to turn stopping off.
+--read-only to turn stopping off. Logs are read only from the output file a
+listening process already writes to; the page cannot name a file.
 """
 import argparse
 import json
 import os
+import re
 import signal
+import stat
 import socket
 import ssl
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 HELPER_PORT = 4999
 HOME = os.path.expanduser("~")
@@ -29,9 +33,15 @@ HOME = os.path.expanduser("~")
 NO_PROBE_APPS = ("mysqld", "mongod", "postgres", "redis-server", "rapportd")
 PROBE_TIMEOUT = 0.5
 
-VERSION = "1.2"
+VERSION = "1.3"
 STOP_WAIT_SECONDS = 3
 MAX_BODY_BYTES = 1024
+LOG_LINES_DEFAULT = 200
+LOG_LINES_MAX = 1000
+LOG_TAIL_BYTES = 64 * 1024
+# Colour codes and terminal titles that dev servers print.
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
+STREAMS = {"1": "stdout", "2": "stderr"}
 # (text to find in the app name, label, group)
 APP_RULES = (
     ("rapportd", "macOS sharing", "system"),
@@ -300,6 +310,97 @@ def stop_process(pid, port, force):
                  "error": "still running after 3 s, try Force stop"}
 
 
+def output_targets(pid):
+    """Return [(stream, lsof type, name)] for the stdout and stderr of pid."""
+    out = run(["lsof", "-a", "-p", str(pid), "-d", "1,2", "-F", "ftn"])
+    targets = []
+    stream = kind = ""
+    for line in out.splitlines():
+        tag, value = line[:1], line[1:]
+        if tag == "f":
+            stream, kind = STREAMS.get(value, ""), ""
+        elif tag == "t":
+            kind = value
+        elif tag == "n" and stream:
+            targets.append((stream, kind, value))
+    return targets
+
+
+def no_log_reason(targets):
+    """Say in plain words why a process has no log file to show."""
+    names = [name for _, _, name in targets]
+    kinds = [kind for _, kind, _ in targets]
+    terminal = next((n for n in names if n.startswith("/dev/tty")), "")
+    if terminal:
+        return f"Output goes to terminal {terminal[5:]} - read it in that window."
+    if names and all(n == "/dev/null" for n in names):
+        return "Output is thrown away (/dev/null), so there is nothing to show."
+    if any(k in ("PIPE", "unix", "FIFO") for k in kinds):
+        return "Output goes to a pipe owned by the app that started it."
+    return "No output file found for this process."
+
+
+def tail_lines(path, count):
+    """Return (last `count` lines, file size). Reads at most LOG_TAIL_BYTES."""
+    # O_NONBLOCK: never hang if the path was swapped for a pipe meanwhile.
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as fh:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("not a regular file")
+        start = max(0, info.st_size - LOG_TAIL_BYTES)
+        fh.seek(start)
+        data = fh.read(LOG_TAIL_BYTES)
+    text = ANSI_RE.sub("", data.decode("utf-8", "replace"))
+    lines = [line.rsplit("\r", 1)[-1] for line in text.split("\n")]
+    if start > 0:
+        lines = lines[1:]
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines[-count:], info.st_size
+
+
+def read_logs(pid, port, count):
+    """Return (status, body) with the tail of the files pid writes output to."""
+    if (pid, port) not in listening_sockets():
+        return 409, {"error": f"PID {pid} is not listening on port {port} any more"}
+    targets = output_targets(pid)
+    files = {}
+    for stream, kind, name in targets:
+        if kind == "REG":
+            files.setdefault(name, []).append(stream)
+    body = {"pid": pid, "port": port, "files": [], "reason": ""}
+    for name, streams in files.items():
+        try:
+            lines, size = tail_lines(name, count)
+        except OSError as err:
+            body["reason"] = f"Cannot read {pretty_folder(name)}: {err.strerror or err}"
+            continue
+        body["files"].append({
+            "path": pretty_folder(name),
+            "streams": streams,
+            "size": size,
+            "lines": lines,
+        })
+    if not files:
+        body["reason"] = no_log_reason(targets)
+    return 200, body
+
+
+def parse_log_query(query):
+    """Read pid, port and lines from "?pid=1&port=2&lines=3"."""
+    params = parse_qs(query)
+    try:
+        pid = int(params["pid"][0])
+        port = int(params["port"][0])
+        count = int(params.get("lines", [LOG_LINES_DEFAULT])[0])
+    except (KeyError, ValueError):
+        return None
+    if pid <= 0 or not 0 < port < 65536 or count <= 0:
+        return None
+    return pid, port, min(count, LOG_LINES_MAX)
+
+
 def parse_stop_request(raw):
     try:
         body = json.loads(raw)
@@ -355,11 +456,28 @@ class Handler(BaseHTTPRequestHandler):
         if origin is not None and origin not in allowed_origins:
             self.reply(403, {"error": f"origin not allowed: {origin}"})
             return
-        if self.path.split("?")[0] != "/ports":
-            self.reply(404, {"error": "use /ports"})
+        url = urlsplit(self.path)
+        if url.path == "/logs":
+            self.send_logs(origin, url.query)
+            return
+        if url.path != "/ports":
+            self.reply(404, {"error": "use /ports or /logs"})
             return
         can_kill = not settings["read_only"]
-        self.reply(200, {"version": VERSION, "canKill": can_kill, "ports": scan()})
+        self.reply(200, {"version": VERSION, "canKill": can_kill, "canLogs": True,
+                         "ports": scan()})
+
+    def send_logs(self, origin, query):
+        # Logs can hold secrets: like /kill, a missing Origin is refused too.
+        if origin is None:
+            self.reply(403, {"error": "origin not allowed: None"})
+            return
+        request = parse_log_query(query)
+        if request is None:
+            self.reply(400, {"error": "use /logs?pid=N&port=N[&lines=N]"})
+            return
+        status, body = read_logs(*request)
+        self.reply(status, body)
 
     def do_POST(self):
         if not self.host_ok():

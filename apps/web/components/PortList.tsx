@@ -1,25 +1,61 @@
+"use client";
+
+import { useState } from "react";
+import type { LogsFn } from "@/hooks/useLogFollow";
 import { uptime, plural, processText } from "@/lib/format";
 import { groupPorts, type PortCard } from "@/lib/group";
 import type { PortInfo } from "@/lib/types";
+import { LogPanel } from "./LogPanel";
 import { StopButton, type StopFn } from "./StopButton";
 
-/** What a row can do. onStop is missing when the helper cannot stop processes. */
+/**
+ * What a row can do. onStop is missing when the helper cannot stop
+ * processes, onLogs when it is too old to read logs.
+ */
 export type RowActions = {
   onCopy: (text: string, done: string) => void;
   onToast: (text: string) => void;
   onStop?: StopFn;
+  onLogs?: LogsFn;
 };
+
+/** Open state of one row's log panel; missing when logs are not available. */
+type LogsToggle = { open: boolean; toggle: () => void };
+
+type RowProps = { row: PortInfo; actions: RowActions };
+
+function useLogsToggle(actions: RowActions): [LogsToggle | undefined, () => void] {
+  const [open, setOpen] = useState(false);
+  const toggle = actions.onLogs ? { open, toggle: () => setOpen((o) => !o) } : undefined;
+  return [toggle, () => setOpen(false)];
+}
+
+function RowLogs({ row, actions, onClose }: RowProps & { onClose: () => void }) {
+  const { onLogs, onCopy } = actions;
+  return onLogs ? <LogPanel row={row} onLogs={onLogs} onCopy={onCopy} onClose={onClose} /> : null;
+}
 
 function tagClass(row: PortInfo): string {
   return row.group === "project" ? "tag" : "tag plain";
 }
 
-function ActionButtons({ row, actions }: { row: PortInfo; actions: RowActions }) {
+function ActionButtons({ row, actions, logs }: RowProps & { logs?: LogsToggle }) {
   const { url } = row;
   const { onCopy, onStop, onToast } = actions;
   const canStop = onStop && row.group !== "system";
   return (
     <div className="actions">
+      {logs ? (
+        <button
+          type="button"
+          className="btn small"
+          aria-expanded={logs.open}
+          title={`Show what port ${row.port} prints`}
+          onClick={logs.toggle}
+        >
+          {logs.open ? "Hide logs" : "Logs"}
+        </button>
+      ) : null}
       {url ? (
         <>
           <button type="button" className="btn small" title="Copy address" onClick={() => onCopy(url, `Copied ${url}`)}>
@@ -45,15 +81,23 @@ function Card({ card, actions }: { card: PortCard; actions: RowActions }) {
         {card.path ? <span className="path">{card.path}</span> : null}
         <span className="count">{plural(card.rows.length, "port")}</span>
       </div>
-      {card.rows.map((row) => (
-        <div className="row" key={`${row.port}:${row.pids[0]}`}>
-          <span className="port">{row.port}</span>
-          <span className={tagClass(row)}>{row.label}</span>
-          <span className="meta" title={row.command}>{processText(row)}</span>
-          <ActionButtons row={row} actions={actions} />
-        </div>
-      ))}
+      {card.rows.map((row) => <CardRow key={`${row.port}:${row.pids[0]}`} row={row} actions={actions} />)}
     </div>
+  );
+}
+
+function CardRow({ row, actions }: RowProps) {
+  const [logs, close] = useLogsToggle(actions);
+  return (
+    <>
+      <div className="row">
+        <span className="port">{row.port}</span>
+        <span className={tagClass(row)}>{row.label}</span>
+        <span className="meta" title={row.command}>{processText(row)}</span>
+        <ActionButtons row={row} actions={actions} logs={logs} />
+      </div>
+      {logs?.open ? <RowLogs row={row} actions={actions} onClose={close} /> : null}
+    </>
   );
 }
 
@@ -118,18 +162,34 @@ export function TableView({ rows, sort, onSort, actions }: TableViewProps) {
           </thead>
           <tbody>
             {sortRows(rows, sort).map((row) => (
-              <tr key={`${row.port}:${row.pids[0]}`}>
-                <td><span className="port">{row.port}</span></td>
-                <td><span className={tagClass(row)}>{row.label}</span></td>
-                <td className="wrap-ok"><span className="path" title={row.command}>{row.folder || "—"}</span></td>
-                <td>{uptime(row.uptime)}</td>
-                <td>{row.pids.join(", ")}</td>
-                <td><ActionButtons row={row} actions={actions} /></td>
-              </tr>
+              <TableRow key={`${row.port}:${row.pids[0]}`} row={row} actions={actions} />
             ))}
           </tbody>
         </table>
       </div>
     </div>
+  );
+}
+
+function TableRow({ row, actions }: RowProps) {
+  const [logs, close] = useLogsToggle(actions);
+  return (
+    <>
+      <tr>
+        <td><span className="port">{row.port}</span></td>
+        <td><span className={tagClass(row)}>{row.label}</span></td>
+        <td className="wrap-ok"><span className="path" title={row.command}>{row.folder || "—"}</span></td>
+        <td>{uptime(row.uptime)}</td>
+        <td>{row.pids.join(", ")}</td>
+        <td><ActionButtons row={row} actions={actions} logs={logs} /></td>
+      </tr>
+      {logs?.open ? (
+        <tr className="log-row">
+          <td colSpan={COLUMNS.length + 2}>
+            <RowLogs row={row} actions={actions} onClose={close} />
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }

@@ -5,7 +5,7 @@ import { parseHelperReply } from "./parse";
 describe("parseHelperReply", () => {
   it("keeps valid rows", () => {
     const row = makePort();
-    expect(parseHelperReply({ version: "1.1", ports: [row] })).toEqual({ ports: [row], canKill: false });
+    expect(parseHelperReply({ version: "1.1", ports: [row] })).toEqual({ ports: [row], canKill: false, canLogs: false });
   });
 
   it("drops rows with a wrong shape and keeps the rest", () => {

@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Logs** button on every port: a live panel with the last 200 lines the process printed,
+  updated every 2 s. Works in the project view, the table and the demo.
+- Helper 1.3: `GET /logs?pid=&port=` endpoint and `canLogs` in `/ports`.
 - **Stop all** button: stops every listed port except system apps, after one confirm.
   Respects the search filter.
 - `?demo` link opens the demo directly.

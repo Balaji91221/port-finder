@@ -111,6 +111,7 @@ function Body({ source, prefs, port, onPrefs, copy, toast }: BodyProps) {
     case "helper":
     case "demo": {
       const canStop = source.kind === "demo" || source.canKill;
+      const canLogs = source.kind === "demo" || source.canLogs;
       return (
         <FullView
           ports={source.ports}
@@ -124,6 +125,7 @@ function Body({ source, prefs, port, onPrefs, copy, toast }: BodyProps) {
           onToast={toast}
           onStop={canStop ? port.stopRow : undefined}
           onStopAll={canStop ? port.stopRows : undefined}
+          onLogs={canLogs ? port.readLogs : undefined}
         />
       );
     }

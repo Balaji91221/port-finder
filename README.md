@@ -74,12 +74,17 @@ flowchart LR
   end
   B["Browser<br/>Port Finder page"] -->|"GET /ports"| H
   B -->|"POST /kill (after confirm)"| H
+  B -->|"GET /logs (every 2 s while open)"| H
   B -.->|"quick scan: fetch localhost:PORT"| Laptop
   V["Vercel<br/>static Next.js app"] -->|serves the page| B
 ```
 
 - **With the helper:** the page asks `127.0.0.1:4999/ports`. The helper runs `lsof` and `ps`,
   works out the app name and project folder, and answers with JSON.
+- **Logs:** each port has a **Logs** button. The helper finds the file that process writes
+  its output (stdout / stderr) to with `lsof`, and sends the last 200 lines. The panel
+  updates every 2 s while it is open. A process that prints to a terminal window, a pipe or
+  `/dev/null` has no file to read; the panel says which one instead.
 - **Without the helper:** the page tries `http://localhost:PORT` for a list of common ports.
   Any HTTP reply means "open". It cannot see app names, folders or non-web ports.
 
@@ -93,6 +98,9 @@ The helper can stop processes, so it is locked down:
 - **Stop** works only on a PID that is listening on that port *right now*, owned by you,
   and not a system app (AirPlay, macOS sharing…). It cannot stop itself.
 - Every stop asks for confirmation in the page first.
+- **Logs** come only from a file the listening process already writes its output to — the page
+  sends a PID and port, never a file path. Only regular files are read, at most the last 64 KB.
+  A request without an allowed `Origin` is refused, because logs can hold secrets.
 - Want a list only? Start it with **`--read-only`** and every stop request is refused.
 
 Found a security problem? See [SECURITY.md](SECURITY.md) — please do not open a public issue.

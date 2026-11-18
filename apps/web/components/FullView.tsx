@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { filterPorts, portStats } from "@/lib/group";
 import type { PortInfo, Prefs } from "@/lib/types";
+import type { LogsFn } from "@/hooks/useLogFollow";
 import { SearchIcon } from "./icons";
 import { ProjectView, TableView, type RowActions, type Sort, type SortKey } from "./PortList";
 import { StopAllButton, type StopAllFn } from "./StopAllButton";
@@ -21,6 +22,8 @@ type FullViewProps = {
   /** Missing when the helper is read-only or too old to stop processes. */
   onStop?: StopFn;
   onStopAll?: StopAllFn;
+  /** Missing when the helper is too old to read logs. */
+  onLogs?: LogsFn;
 };
 
 function Stats({ ports }: { ports: PortInfo[] }) {
@@ -52,8 +55,9 @@ function useSlashFocus(): React.RefObject<HTMLInputElement | null> {
 }
 
 export function FullView(props: FullViewProps) {
-  const { ports, prefs, busy, demo, onPrefs, onRefresh, onLeaveDemo, onCopy, onToast, onStop, onStopAll } = props;
-  const actions: RowActions = { onCopy, onToast, onStop };
+  const { ports, prefs, busy, demo, onPrefs, onRefresh, onLeaveDemo, onCopy, onToast } = props;
+  const { onStop, onStopAll, onLogs } = props;
+  const actions: RowActions = { onCopy, onToast, onStop, onLogs };
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>({ key: "port", desc: false });
   const searchRef = useSlashFocus();

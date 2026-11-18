@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DEMO_PORTS } from "@/lib/demoData";
-import { fetchHelper, stopProcess, type HelperResult } from "@/lib/helper";
+import { demoLogs } from "@/lib/demoLogs";
+import { fetchHelper, fetchLogs, stopProcess, type HelperResult } from "@/lib/helper";
 import { COMMON_PORTS, quickScan } from "@/lib/quickScan";
-import type { PortInfo, Source, StopAllResult, StopResult } from "@/lib/types";
+import type { LogResult, PortInfo, Source, StopAllResult, StopResult } from "@/lib/types";
 
 const OFFLINE_RETRY_MS = 3000;
 const AUTO_REFRESH_MS = 5000;
@@ -20,6 +21,7 @@ export type PortSourceApi = {
   leaveDemo: () => void;
   stopRow: (row: PortInfo, force: boolean) => Promise<StopResult>;
   stopRows: (rows: PortInfo[]) => Promise<StopAllResult>;
+  readLogs: (row: PortInfo, signal: AbortSignal) => Promise<LogResult>;
 };
 
 /** Stop every process on the row, one at a time; the first failure wins. */
@@ -31,6 +33,21 @@ async function stopPids(row: PortInfo, force: boolean): Promise<StopResult> {
     }
   }
   return { ok: true };
+}
+
+/**
+ * Read the logs of the first process on the row that writes to a file.
+ * Uvicorn --reload, for example, has a parent and a worker on one port.
+ */
+async function readPidLogs(row: PortInfo, signal: AbortSignal): Promise<LogResult> {
+  let last: LogResult = { ok: true, files: [], reason: "No process on this port." };
+  for (const pid of row.pids) {
+    last = await fetchLogs({ pid, port: row.port, signal });
+    if (!last.ok || last.files.length) {
+      return last;
+    }
+  }
+  return last;
 }
 
 /**
@@ -47,8 +64,8 @@ export function usePortSource(autoRefresh: boolean): PortSourceApi {
   const apply = useCallback((result: HelperResult): void => {
     if (result.ok) {
       scanAbort.current?.abort();
-      const { ports, canKill } = result;
-      setSource({ kind: "helper", ports, canKill, checkedAt: new Date() });
+      const { ports, canKill, canLogs } = result;
+      setSource({ kind: "helper", ports, canKill, canLogs, checkedAt: new Date() });
       return;
     }
     // Keep a finished or running scan on screen; only leave the helper view.
@@ -135,6 +152,10 @@ export function usePortSource(autoRefresh: boolean): PortSourceApi {
     return outcome;
   }, [kind, refresh, dropDemoRows]);
 
+  const readLogs = useCallback((row: PortInfo, signal: AbortSignal): Promise<LogResult> => {
+    return kind === "demo" ? Promise.resolve(demoLogs(row)) : readPidLogs(row, signal);
+  }, [kind]);
+
   // First check on load.
   useEffect(() => {
     // "?demo" opens the demo straight away, for shared links and screenshots.
@@ -173,5 +194,7 @@ export function usePortSource(autoRefresh: boolean): PortSourceApi {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [kind, refresh]);
 
-  return { source, busy, refresh, startScan, stopScan, showDemo, leaveDemo, stopRow, stopRows };
+  return {
+    source, busy, refresh, startScan, stopScan, showDemo, leaveDemo, stopRow, stopRows, readLogs,
+  };
 }

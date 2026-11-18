@@ -28,7 +28,7 @@ export type ScanProgress = { done: number; total: number };
 
 export type Source =
   | { kind: "connecting" }
-  | { kind: "helper"; ports: PortInfo[]; canKill: boolean; checkedAt: Date }
+  | { kind: "helper"; ports: PortInfo[]; canKill: boolean; canLogs: boolean; checkedAt: Date }
   | { kind: "demo"; ports: PortInfo[] }
   | { kind: "scanning"; progress: ScanProgress; hits: ScanHit[] }
   | { kind: "scanned"; hits: ScanHit[]; scannedCount: number; checkedAt: Date }
@@ -37,6 +37,21 @@ export type Source =
 export type StopResult =
   | { ok: true }
   | { ok: false; canForce: boolean; message: string };
+
+/** The end of one file a process writes its output to. */
+export type LogFile = {
+  /** Shown with the home folder as "~". */
+  path: string;
+  /** Which outputs go to this file: "stdout", "stderr" or both. */
+  streams: string[];
+  size: number;
+  lines: string[];
+};
+
+/** files is empty when the output cannot be read; reason then says why. */
+export type LogResult =
+  | { ok: true; files: LogFile[]; reason: string }
+  | { ok: false; message: string };
 
 export type StopAllResult = { stopped: number; failed: number; firstError: string };
 
